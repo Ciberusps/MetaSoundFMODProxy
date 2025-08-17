@@ -36,7 +36,7 @@ namespace Metasound
     // };
 
     // Register data ref types so these can be used as MetaSound pin types
-	DECLARE_METASOUND_DATA_REFERENCE_ALIAS_TYPES(FFMODEventAsset, METASOUNDFMODPROXY_API, FFMODEventAssetTypeInfo, FFMODEventAssetReadRef, FFMODEventAssetWriteRef)
+	// DECLARE_METASOUND_DATA_REFERENCE_ALIAS_TYPES(FFMODEventAsset, METASOUNDFMODPROXY_API, FFMODEventAssetTypeInfo, FFMODEventAssetReadRef, FFMODEventAssetWriteRef)
 
 	// Plural: TYPES
 	// DECLARE_METASOUND_DATA_REFERENCE_TYPES(FFMODEventAsset, METASOUNDFMODPROXY_API);

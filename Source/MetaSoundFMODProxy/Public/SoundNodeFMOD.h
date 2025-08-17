@@ -41,6 +41,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FMOD")
 	TMap<FName, float> EventParameters;
 
+#if WITH_EDITORONLY_DATA
+	/** When previewing in the SoundCue editor, force playback as 2D */
+	UPROPERTY(EditAnywhere, Category = "FMOD|Preview")
+	bool bPreviewAs2D = true;
+#endif
+
 	//~ Begin USoundNode Interface
 	virtual void ParseNodes(FAudioDevice* AudioDevice, const UPTRINT NodeWaveInstanceHash, FActiveSound& ActiveSound, const FSoundParseParameters& ParseParams, TArray<FWaveInstance*>& WaveInstances) override;
 	virtual int32 GetMaxChildNodes() const override { return 0; }

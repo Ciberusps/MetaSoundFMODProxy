@@ -11,6 +11,10 @@
 #include "Engine/Engine.h"
 #include "FMODProxySubsystem.h"
 #include "Sound/SoundBase.h"
+#if WITH_EDITOR
+#include "Editor.h"
+#include "FMODStudioModule.h"
+#endif
 
 
 
@@ -57,20 +61,24 @@ void USoundNodeFMOD::ParseNodes(
 			}
 		}
 
-		// Get world context for SoundNode - use GEngine approach
-		UWorld* World = nullptr;
-		if (GEngine)
+		// Editor preview: mirror FMOD AssetTypeActions audition behavior (no world needed)
+		#if WITH_EDITOR
+		if (GIsEditor && (!GEditor || !GEditor->PlayWorld))
 		{
-			// For SoundCues, we typically want the game world
-			for (const FWorldContext& Context : GEngine->GetWorldContexts())
+			if (FMODEvent)
 			{
-				if (Context.WorldType == EWorldType::Game || Context.WorldType == EWorldType::PIE)
+				FMOD::Studio::EventInstance* PreviewInstance = IFMODStudioModule::Get().CreateAuditioningInstance(FMODEvent);
+				if (PreviewInstance)
 				{
-					World = Context.World();
-					break;
+					PreviewInstance->start();
 				}
 			}
+			return;
 		}
+		#endif
+
+		// Runtime world (reverted): use GWorld
+		UWorld* World = GWorld;
 
 		if (World)
 		{
@@ -103,7 +111,7 @@ void USoundNodeFMOD::ParseNodes(
 			// Fallback to direct FMOD Blueprint Statics
 			if (!FMODComponent)
 			{
-				// Play at location (since we can't access the audio component directly from ActiveSound)
+				// Play at location
 				FFMODEventInstance EventInstance = UFMODBlueprintStatics::PlayEventAtLocation(
 					World,
 					FMODEvent,

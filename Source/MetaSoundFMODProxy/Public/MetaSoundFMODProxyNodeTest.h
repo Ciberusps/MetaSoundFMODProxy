@@ -2,21 +2,49 @@
 
 #include "MetasoundNodeInterface.h"
 #include "MetasoundParamHelper.h"
+#include "MetasoundEnumRegistrationMacro.h"
+#include "Math/LFSR.h"
 
-// #include "HarmonixMetasound/Common.h"
-
-namespace MetaSoundFMODProxy::Nodes::Peak
+namespace Metasound
 {
-	const METASOUNDFMODPROXY_API Metasound::FNodeClassName& GetClassName();
-	
-	namespace Inputs
-	{
-		DECLARE_METASOUND_PARAM(METASOUNDFMODPROXY_API, Enable);
-		DECLARE_METASOUND_PARAM(METASOUNDFMODPROXY_API, AudioMono);
-	}
+    class FMetaSoundFMODProxyOperator : public TExecutableOperator<FMetaSoundFMODProxyOperator>
+    {
+    public:
+        FMetaSoundFMODProxyOperator(const FBuildOperatorParams& InParams,
+            TDataReadReference<FTrigger> InputTriggerNext,
+            TDataReadReference<int32> InNumBits);
 
-	namespace Outputs
-	{
-		DECLARE_METASOUND_PARAM(METASOUNDFMODPROXY_API, Peak);
-	}
+        static const FNodeClassMetadata& GetNodeInfo();
+        static const FVertexInterface& GetVertexInterface();
+        static TUniquePtr<IOperator> CreateOperator(const FBuildOperatorParams& InParams, FBuildResults& OutBuildResults);
+
+        virtual void BindInputs(FInputVertexInterfaceData& InOutVertexInterfaceData) override;
+        virtual void BindOutputs(FOutputVertexInterfaceData& InOutVertexInterfaceData) override;
+
+        void Execute();
+
+    private:
+        FTriggerReadRef TriggerNext;
+        FInt32ReadRef NumBits;
+        FTriggerWriteRef TriggerOnNext;
+        FInt32WriteRef OutValue;
+
+        UE::Math::FLinearFeedbackShiftRegister LFSR;
+        
+        void Reset();
+    };
+
+    //------------------------------------------------------------------------------
+
+    class FMetaSoundFMODProxyNode : public FNodeFacade
+    {
+    public:
+        FMetaSoundFMODProxyNode(const FNodeInitData& InitData)
+            : FNodeFacade(InitData.InstanceName, InitData.InstanceID,
+                TFacadeOperatorClass<FMetaSoundFMODProxyOperator>())
+        {
+        }
+
+        virtual ~FMetaSoundFMODProxyNode() = default;
+    };
 }

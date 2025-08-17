@@ -11,6 +11,8 @@
 #include "Engine/Engine.h"
 #include "FMODProxySubsystem.h"
 #include "Sound/SoundBase.h"
+#include "FMODWaitingWave.h"
+#include "Async/Async.h"
 #if WITH_EDITOR
 #include "Editor.h"
 #include "FMODStudioModule.h"
@@ -38,105 +40,127 @@ void USoundNodeFMOD::ParseNodes(
 	// Clean up any finished components first
 	CleanupFinishedComponents();
 
-	// Don't create wave instances - we handle FMOD playback directly
-	// Instead, trigger FMOD event creation
 	if (FMODEvent && AudioDevice)
 	{
-		// Create a unique ID for this sound instance
 		uint32 SoundInstanceId = GetTypeHash(NodeWaveInstanceHash);
-		
-		// Check if we already have an active component for this instance
 		if (ActiveFMODComponents.Contains(SoundInstanceId))
 		{
 			TWeakObjectPtr<UFMODAudioComponent> ExistingComponent = ActiveFMODComponents[SoundInstanceId];
 			if (ExistingComponent.IsValid() && ExistingComponent->IsPlaying())
 			{
-				// Component is still playing, don't create another one
 				return;
 			}
 			else
 			{
-				// Component finished or was destroyed, remove from tracking
 				ActiveFMODComponents.Remove(SoundInstanceId);
 			}
 		}
 
-		// Editor preview: mirror FMOD AssetTypeActions audition behavior (no world needed)
 		#if WITH_EDITOR
 		if (GIsEditor && (!GEditor || !GEditor->PlayWorld))
 		{
 			if (FMODEvent)
 			{
-				FMOD::Studio::EventInstance* PreviewInstance = IFMODStudioModule::Get().CreateAuditioningInstance(FMODEvent);
-				if (PreviewInstance)
+				UFMODWaitingWave* WaitingWave = NewObject<UFMODWaitingWave>(GetTransientPackage());
+				if (WaitingWave)
 				{
-					PreviewInstance->start();
+					FSoundParseParameters UpdatedParams = ParseParams;
+					UpdatedParams.bLooping = true;
+					WaitingWave->InitWaitingPreview(nullptr);
+					WaitingWave->Parse(AudioDevice, NodeWaveInstanceHash, ActiveSound, UpdatedParams, WaveInstances);
+					TWeakObjectPtr<UFMODWaitingWave> WeakWaiting = WaitingWave;
+					UFMODEvent* EventCopy = FMODEvent;
+					AsyncTask(ENamedThreads::GameThread, [WeakWaiting, EventCopy]()
+					{
+						if (!EventCopy)
+						{
+							return;
+						}
+						FMOD::Studio::EventInstance* PreviewInstance = IFMODStudioModule::Get().CreateAuditioningInstance(EventCopy);
+						if (PreviewInstance)
+						{
+							PreviewInstance->start();
+							if (WeakWaiting.IsValid())
+							{
+								WeakWaiting->InitWaitingPreview(PreviewInstance);
+							}
+						}
+					});
 				}
 			}
 			return;
 		}
 		#endif
 
-		// Runtime world (reverted): use GWorld
 		UWorld* World = GWorld;
 
 		if (World)
 		{
-			UFMODAudioComponent* FMODComponent = nullptr;
+			FGuid PlayedInstanceGuid;
 
-			// Try using the proxy subsystem first if available
-			if (UGameInstance* GameInstance = World->GetGameInstance())
+			UFMODWaitingWave* WaitingWave = NewObject<UFMODWaitingWave>(GetTransientPackage());
+			if (WaitingWave)
 			{
-				if (UFMODProxySubsystem* ProxySubsystem = GameInstance->GetSubsystem<UFMODProxySubsystem>())
+				FSoundParseParameters UpdatedParams = ParseParams;
+				UpdatedParams.bLooping = true;
+				WaitingWave->InitWaiting(PlayedInstanceGuid, nullptr);
+				WaitingWave->Parse(AudioDevice, NodeWaveInstanceHash, ActiveSound, UpdatedParams, WaveInstances);
+				TWeakObjectPtr<UFMODWaitingWave> WeakWaiting = WaitingWave;
+
+				FTransform TransformCopy = ParseParams.Transform;
+				UFMODEvent* EventCopy = FMODEvent;
+				TMap<FName, float> ParamsCopy = EventParameters;
+				bool bAutoDestroyCopy = bAutoDestroy;
+				AsyncTask(ENamedThreads::GameThread, [World, WeakWaiting, TransformCopy, EventCopy, ParamsCopy, bAutoDestroyCopy]()
 				{
-					// Use proxy subsystem to play the event
-					FVector Location = ParseParams.Transform.GetLocation();
-					
-					if (FMODEvent)
+					if (!EventCopy)
 					{
-						FGuid InstanceGuid = ProxySubsystem->PlayEventAtLocationByAsset(World, FMODEvent, ParseParams.Transform, bAutoDestroy);
-						
-						// Set parameters if any
-						for (const auto& Param : EventParameters)
-						{
-							ProxySubsystem->SetEventParameter(InstanceGuid, Param.Key.ToString(), Param.Value);
-						}
-						
-						// Note: ProgrammerSound is handled by the FMOD component callback system
-						// We can't set it directly via parameters in the proxy subsystem
+						return;
 					}
-				}
-			}
-
-			// Fallback to direct FMOD Blueprint Statics
-			if (!FMODComponent)
-			{
-				// Play at location
-				FFMODEventInstance EventInstance = UFMODBlueprintStatics::PlayEventAtLocation(
-					World,
-					FMODEvent,
-					ParseParams.Transform,
-					true // bAutoPlay
-				);
-				
-				// Note: We get an EventInstance struct, not a component
-				// The FMOD plugin handles the component internally
-				// For SoundCue integration, this basic playback should be sufficient
+					FGuid InstanceGuid;
+					bool bUsedProxy = false;
+					if (UGameInstance* GI = World ? World->GetGameInstance() : nullptr)
+					{
+						if (UFMODProxySubsystem* ProxySubsystem = GI->GetSubsystem<UFMODProxySubsystem>())
+						{
+							InstanceGuid = ProxySubsystem->PlayEventAtLocationByAsset(World, EventCopy, TransformCopy, bAutoDestroyCopy);
+							for (const auto& KV : ParamsCopy)
+							{
+								ProxySubsystem->SetEventParameter(InstanceGuid, KV.Key.ToString(), KV.Value);
+							}
+							bUsedProxy = true;
+						}
+					}
+					if (WeakWaiting.IsValid())
+					{
+						if (bUsedProxy)
+						{
+							WeakWaiting->SetInstanceId(InstanceGuid);
+						}
+						else
+						{
+							// Fallback: use FMOD blueprint statics and bind native instance pointer
+							UObject* WorldContext = World;
+							FFMODEventInstance EventInstance = UFMODBlueprintStatics::PlayEventAtLocation(WorldContext, EventCopy, TransformCopy, true);
+							for (const auto& KV : ParamsCopy)
+							{
+								UFMODBlueprintStatics::EventInstanceSetParameter(EventInstance, KV.Key, KV.Value);
+							}
+							// Bind to preview/native pointer to poll playback state
+							WeakWaiting->InitWaitingPreview(EventInstance.Instance);
+						}
+					}
+				});
 			}
 		}
 	}
-
-	// Note: We don't add any WaveInstances because FMOD handles audio playback directly
-	// The SoundCue system will see no wave instances and won't create traditional audio components
 }
-
 
 
 
 
 float USoundNodeFMOD::GetDuration()
 {
-	// FMOD events have dynamic durations, return indefinite
 	return INDEFINITELY_LOOPING_DURATION;
 }
 
@@ -162,8 +186,6 @@ void USoundNodeFMOD::CleanupFinishedComponents()
 
 void USoundNodeFMOD::OnFMODEventStopped()
 {
-	// This will be called when any tracked FMOD component stops
-	// The cleanup will happen in the next ParseNodes call
 }
 
 

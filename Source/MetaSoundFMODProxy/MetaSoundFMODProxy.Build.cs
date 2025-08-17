@@ -21,6 +21,8 @@ public class MetaSoundFMODProxy : ModuleRules
 			"AudioExtensions",
 			"SignalProcessing",
 			"FMODStudio",
+			"AudioMixer",
+			"AudioPlatformConfiguration",
 		});
 
         PublicIncludePathModuleNames.AddRange(
@@ -29,6 +31,19 @@ public class MetaSoundFMODProxy : ModuleRules
         );
 		
 		PrivateDependencyModuleNames.AddRange(new string[] {
+			"Slate",
+			"SlateCore",
 		});
+
+		if (Target.bBuildEditor)
+		{
+			PrivateDependencyModuleNames.AddRange(new string[] {
+				"UnrealEd",
+				"ToolMenus",
+				"EditorStyle",
+				"EditorWidgets",
+				"AudioEditor",
+			});
+		}
 	}
 }

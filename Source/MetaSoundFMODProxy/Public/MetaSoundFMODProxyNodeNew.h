@@ -2,14 +2,20 @@
 
 #pragma once
 
+#include "MetasoundFacade.h"
 #include "MetasoundNodeInterface.h"
+#include "MetasoundBuilderInterface.h"
+#include "MetasoundVertex.h"
 #include "MetasoundParamHelper.h"
-#include "MetasoundEnumRegistrationMacro.h"
 #include "MetasoundTrigger.h"
 #include "MetasoundExecutableOperator.h"
 #include "MetasoundOperatorInterface.h"
-
-using namespace Metasound;
+#include "MetasoundPrimitives.h"
+#include "MetasoundDataReference.h"
+#include "FMODEvent.h"
+#include "MetaSoundFMODProxyDataTypes.h"
+#include "MetasoundDataReferenceMacro.h"
+#include "MetasoundDataReferenceCollection.h"
 
 namespace Metasound
 {
@@ -20,7 +26,12 @@ namespace Metasound
             const FBuildOperatorParams& InParams,
             const FTriggerReadRef& InPlayTrigger,
             const FTriggerReadRef& InStopTrigger,
-            const FStringReadRef& InEventPath);
+            const TDataReadReference<FFMODEventAsset>& InEventAsset,
+            const FStringReadRef& InParam1Name,
+            const FFloatReadRef& InParam1Value,
+            const FStringReadRef& InParam2Name,
+            const FFloatReadRef& InParam2Value,
+            const FStringReadRef& InProgrammerSoundName);
 
         static const FNodeClassMetadata& GetNodeInfo();
         static const FVertexInterface& GetVertexInterface();
@@ -35,7 +46,12 @@ namespace Metasound
         // FMOD
         FTriggerReadRef PlayTrigger;
         FTriggerReadRef StopTrigger;
-        FStringReadRef EventPathRef;
+        TDataReadReference<FFMODEventAsset> EventAssetRef;
+        FStringReadRef Param1Name;
+        FFloatReadRef Param1Value;
+        FStringReadRef Param2Name;
+        FFloatReadRef Param2Value;
+        FStringReadRef ProgrammerSoundName;
 
         FTriggerWriteRef OutFinishedTrigger;
         FBoolWriteRef OutIsPlaying;
@@ -50,6 +66,14 @@ namespace Metasound
     class FMetaSoundFMODProxyNodeNew : public FNodeFacade
     {
     public:
+        // UE5.6 constructor
+        FMetaSoundFMODProxyNodeNew(FNodeData InNodeData, TSharedRef<const FNodeClassMetadata> InClassMetadata)
+            : FNodeFacade(InNodeData.Name, InNodeData.ID,
+                TFacadeOperatorClass<FMetaSoundFMODProxyNewOperator>())
+        {
+        }
+
+        // Legacy constructor for compatibility
         FMetaSoundFMODProxyNodeNew(const FNodeInitData& InitData)
             : FNodeFacade(InitData.InstanceName, InitData.InstanceID,
                 TFacadeOperatorClass<FMetaSoundFMODProxyNewOperator>())
@@ -57,5 +81,11 @@ namespace Metasound
         }
 
         virtual ~FMetaSoundFMODProxyNodeNew() = default;
+
+        // Required for UE5.6
+        static FNodeClassMetadata CreateNodeClassMetadata()
+        {
+            return FMetaSoundFMODProxyNewOperator::GetNodeInfo();
+        }
     };
 }

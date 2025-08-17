@@ -1,9 +1,13 @@
 // Pavel Penkov 2025 All Rights Reserved.
 
+#pragma once
+
 #include "MetasoundNodeInterface.h"
 #include "MetasoundParamHelper.h"
 #include "MetasoundEnumRegistrationMacro.h"
-#include "Math/LFSR.h"
+#include "MetasoundTrigger.h"
+#include "MetasoundExecutableOperator.h"
+#include "MetasoundOperatorInterface.h"
 
 using namespace Metasound;
 
@@ -12,9 +16,11 @@ namespace Metasound
     class FMetaSoundFMODProxyNewOperator : public TExecutableOperator<FMetaSoundFMODProxyNewOperator>
     {
     public:
-        FMetaSoundFMODProxyNewOperator(const FBuildOperatorParams& InParams,
-            TDataReadReference<FTrigger> InputTriggerNext,
-            TDataReadReference<int32> InNumBits);
+        FMetaSoundFMODProxyNewOperator(
+            const FBuildOperatorParams& InParams,
+            const FTriggerReadRef& InPlayTrigger,
+            const FTriggerReadRef& InStopTrigger,
+            const FStringReadRef& InEventPath);
 
         static const FNodeClassMetadata& GetNodeInfo();
         static const FVertexInterface& GetVertexInterface();
@@ -26,25 +32,17 @@ namespace Metasound
         void Execute();
 
     private:
-        FTriggerReadRef TriggerNext;
-        FInt32ReadRef NumBits;
-        FTriggerWriteRef TriggerOnNext;
-        FInt32WriteRef OutValue;
+        // FMOD
+        FTriggerReadRef PlayTrigger;
+        FTriggerReadRef StopTrigger;
+        FStringReadRef EventPathRef;
 
+        FTriggerWriteRef OutFinishedTrigger;
+        FBoolWriteRef OutIsPlaying;
 
-    	// FMOD
-    	FTriggerReadRef PlayTrigger;
-    	FTriggerReadRef StopTrigger;
-    	FStringReadRef EventPathRef;
-
-    	FTriggerWriteRef OutFinishedTrigger;
-    	FBoolWriteRef OutIsPlaying;
-
-    	FGuid CurrentInstance;
-
-        UE::Math::FLinearFeedbackShiftRegister LFSR;
-        
-        void Reset();
+        FGuid CurrentInstance;
+    	
+    	void Reset(const IOperator::FResetParams& InParams);
     };
 
     //------------------------------------------------------------------------------

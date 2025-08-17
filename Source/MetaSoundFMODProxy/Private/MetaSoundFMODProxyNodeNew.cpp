@@ -5,31 +5,39 @@
 #include "MetasoundBuilderInterface.h"
 #include "MetasoundParamHelper.h"
 #include "MetasoundTrigger.h"
-#include "Kismet/KismetMathLibrary.h"
+#include "MetasoundNodeRegistrationMacro.h"
+#include "FMODProxySubsystem.h"
+#include "Async/Async.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
+#include "Engine/GameInstance.h"
 
 #define LOCTEXT_NAMESPACE "MetaSoundFMODProxyNodeTest_LFSRNode"
 
 namespace Metasound
 {
-    namespace LFSRVertexNames
+    namespace FMODProxyVertexNames
     {
-        METASOUND_PARAM(InputTriggerNextValue, "Next", "Trigger next value.");
-        METASOUND_PARAM(InputNumBits, "Num Bits", "Number of Bits the LFSR operates on between [2-12] (clamped internally).");
-        METASOUND_PARAM(OutputTriggerOnNext, "On Trigger", "Triggered when the input is triggered.");
-        METASOUND_PARAM(OutputValue, "Output Value", "The output value.");
+        METASOUND_PARAM(InputPlay, "Play", "Trigger to start the FMOD event");
+        METASOUND_PARAM(InputStop, "Stop", "Trigger to stop the FMOD event");
+        METASOUND_PARAM(InputEventPath, "Event Path", "FMOD event path or soft object path to UFMODEvent");
+        METASOUND_PARAM(OutputFinished, "Finished", "Emitted when playback finishes");
+        METASOUND_PARAM(OutputIsPlaying, "Is Playing", "True while the FMOD event is playing");
     }
 
     //------------------------------------------------------------------------------
 
-    FMetaSoundFMODProxyNewOperator::FMetaSoundFMODProxyNewOperator(const FBuildOperatorParams& InParams,
-        TDataReadReference<FTrigger> InputTriggerNext,
-        TDataReadReference<int32> InNumBits)
-        : TriggerNext(InputTriggerNext)
-        , NumBits(InNumBits)
-        , TriggerOnNext(FTriggerWriteRef::CreateNew(InParams.OperatorSettings))
-        , OutValue(TDataWriteReferenceFactory<int32>::CreateAny(InParams.OperatorSettings))
+    FMetaSoundFMODProxyNewOperator::FMetaSoundFMODProxyNewOperator(
+        const FBuildOperatorParams& InParams,
+        const FTriggerReadRef& InPlayTrigger,
+        const FTriggerReadRef& InStopTrigger,
+        const FStringReadRef& InEventPath)
+        : PlayTrigger(InPlayTrigger)
+        , StopTrigger(InStopTrigger)
+        , EventPathRef(InEventPath)
+        , OutFinishedTrigger(FTriggerWriteRef::CreateNew(InParams.OperatorSettings))
+        , OutIsPlaying(TDataWriteReferenceFactory<bool>::CreateAny(InParams.OperatorSettings, false))
     {
-        Reset();
     }
     
     //------------------------------------------------------------------------------
@@ -38,15 +46,15 @@ namespace Metasound
     {
         auto InitNodeMetaData = []() -> FNodeClassMetadata {
             FNodeClassMetadata NodeMetaData {
-                .ClassName = { TEXT("UE"), TEXT("LFSR FMOD TEST (Random)"), TEXT("") },
+                .ClassName = { TEXT("FMOD"), TEXT("Proxy Player (New)"), TEXT("Audio") },
                 .MajorVersion = 1,
                 .MinorVersion = 0,
-                .DisplayName = LOCTEXT("Metasound_LFSRDisplayName", "FMOD TEST LFSR"),
-                .Description = LOCTEXT("Metasound_LFSRDescription", "Maximum Length Linear Feedback Shift Register"),
-                .Author = "Michael Hartung <https://hartung.studio>",
+                .DisplayName = LOCTEXT("Metasound_FMODProxyNewDisplayName", "FMOD Proxy Player (New)"),
+                .Description = LOCTEXT("Metasound_FMODProxyNewDescription", "Plays an FMOD event and emits Finished when the event stops"),
+                .Author = "MetaSoundFMODProxy",
                 .PromptIfMissing = PluginNodeMissingPrompt,
                 .DefaultInterface = GetVertexInterface(),
-                .CategoryHierarchy = { LOCTEXT("Metasound_LFSRNodeCategory", "Random") }
+                .CategoryHierarchy = { LOCTEXT("Metasound_FMODNodeCategory", "Audio") }
             };
             
             return NodeMetaData;
@@ -60,16 +68,17 @@ namespace Metasound
 
     const FVertexInterface& FMetaSoundFMODProxyNewOperator::GetVertexInterface()
     {
-        using namespace LFSRVertexNames;;
+        using namespace FMODProxyVertexNames;
         
         static const FVertexInterface VertexInterface(
             FInputVertexInterface(
-                TInputDataVertex<FTrigger>(METASOUND_GET_PARAM_NAME_AND_METADATA(InputTriggerNextValue)),
-                TInputDataVertex<int32>(METASOUND_GET_PARAM_NAME_AND_METADATA(InputNumBits), 3)
+                TInputDataVertex<FTrigger>(METASOUND_GET_PARAM_NAME_AND_METADATA(InputPlay)),
+                TInputDataVertex<FTrigger>(METASOUND_GET_PARAM_NAME_AND_METADATA(InputStop)),
+                TInputDataVertex<FString>(METASOUND_GET_PARAM_NAME_AND_METADATA(InputEventPath))
             ),
             FOutputVertexInterface(
-                TOutputDataVertex<FTrigger>(METASOUND_GET_PARAM_NAME_AND_METADATA(OutputTriggerOnNext)),
-                TOutputDataVertex<int32>(METASOUND_GET_PARAM_NAME_AND_METADATA(OutputValue))
+                TOutputDataVertex<FTrigger>(METASOUND_GET_PARAM_NAME_AND_METADATA(OutputFinished)),
+                TOutputDataVertex<bool>(METASOUND_GET_PARAM_NAME_AND_METADATA(OutputIsPlaying))
             )
         );
         
@@ -79,14 +88,15 @@ namespace Metasound
     TUniquePtr<IOperator> FMetaSoundFMODProxyNewOperator::CreateOperator(
         const FBuildOperatorParams& InParams, FBuildResults& OutBuildResults)
     {
-        using namespace LFSRVertexNames;
+        using namespace FMODProxyVertexNames;
         
         const FInputVertexInterfaceData& InputData = InParams.InputData;
 
-        FTriggerReadRef InTriggerNextValue = InputData.GetOrCreateDefaultDataReadReference<FTrigger>(METASOUND_GET_PARAM_NAME(InputTriggerNextValue), InParams.OperatorSettings);
-        FInt32ReadRef MaxValue = InputData.GetOrCreateDefaultDataReadReference<int32>(METASOUND_GET_PARAM_NAME(InputNumBits), InParams.OperatorSettings);
+        FTriggerReadRef Play = InputData.GetOrCreateDefaultDataReadReference<FTrigger>(METASOUND_GET_PARAM_NAME(InputPlay), InParams.OperatorSettings);
+        FTriggerReadRef Stop = InputData.GetOrCreateDefaultDataReadReference<FTrigger>(METASOUND_GET_PARAM_NAME(InputStop), InParams.OperatorSettings);
+        FStringReadRef EventPath = InputData.GetOrCreateDefaultDataReadReference<FString>(METASOUND_GET_PARAM_NAME(InputEventPath), InParams.OperatorSettings);
 
-        return MakeUnique<FMetaSoundFMODProxyNewOperator>(InParams, InTriggerNextValue, MaxValue);
+        return MakeUnique<FMetaSoundFMODProxyNewOperator>(InParams, Play, Stop, EventPath);
 }
 
     //------------------------------------------------------------------------------
@@ -94,9 +104,10 @@ namespace Metasound
     void FMetaSoundFMODProxyNewOperator::BindInputs(
         FInputVertexInterfaceData& InOutVertexInterfaceData)
     {
-        using namespace LFSRVertexNames;
-        InOutVertexInterfaceData.BindReadVertex(METASOUND_GET_PARAM_NAME(InputTriggerNextValue), TriggerNext);
-        InOutVertexInterfaceData.BindReadVertex(METASOUND_GET_PARAM_NAME(InputNumBits), NumBits);
+        using namespace FMODProxyVertexNames;
+        InOutVertexInterfaceData.BindReadVertex(METASOUND_GET_PARAM_NAME(InputPlay), PlayTrigger);
+        InOutVertexInterfaceData.BindReadVertex(METASOUND_GET_PARAM_NAME(InputStop), StopTrigger);
+        InOutVertexInterfaceData.BindReadVertex(METASOUND_GET_PARAM_NAME(InputEventPath), EventPathRef);
     }
 
     //------------------------------------------------------------------------------
@@ -104,36 +115,130 @@ namespace Metasound
     void FMetaSoundFMODProxyNewOperator::BindOutputs(
         FOutputVertexInterfaceData& InOutVertexInterfaceData)
     {
-        using namespace LFSRVertexNames;
-        InOutVertexInterfaceData.BindReadVertex(METASOUND_GET_PARAM_NAME(OutputTriggerOnNext), TriggerNext);
-        InOutVertexInterfaceData.BindReadVertex(METASOUND_GET_PARAM_NAME(OutputValue), OutValue);
+        using namespace FMODProxyVertexNames;
+        InOutVertexInterfaceData.BindWriteVertex(METASOUND_GET_PARAM_NAME(OutputFinished), OutFinishedTrigger);
+        InOutVertexInterfaceData.BindWriteVertex(METASOUND_GET_PARAM_NAME(OutputIsPlaying), OutIsPlaying);
     }
 
     //------------------------------------------------------------------------------
 
     void FMetaSoundFMODProxyNewOperator::Execute()
     {
-        TriggerOnNext->AdvanceBlock();
+        OutFinishedTrigger->AdvanceBlock();
 
-        TriggerNext->ExecuteBlock(
-            [&](int32 StartFrame, int32 EndFrame)
+        PlayTrigger->ExecuteBlock(
+            [](int32, int32) {},
+            [this](int32 StartFrame, int32)
             {
-            },
-            [this](int32 StartFrame, int32 EndFrame)
-            {
-                int32 NumBitsClamped = UKismetMathLibrary::Clamp(*NumBits, 2, 12);
-                *OutValue = LFSR.GetNextValueWithLast(NumBitsClamped);
-                TriggerOnNext->TriggerFrame(StartFrame);
+                const FString EventPath = *EventPathRef;
+                CurrentInstance = FGuid::NewGuid();
+                *OutIsPlaying = true;
+
+                AsyncTask(ENamedThreads::GameThread, [EventPath]()
+                {
+                    if (GEngine)
+                    {
+                        UWorld* World = GEngine->GetWorldContexts().Num() ? GEngine->GetWorldContexts()[0].World() : nullptr;
+                        if (World)
+                        {
+                            if (UGameInstance* GI = World->GetGameInstance())
+                            {
+                                if (UFMODProxySubsystem* Proxy = GI->GetSubsystem<UFMODProxySubsystem>())
+                                {
+                                    Proxy->PlayEventAtLocationByPath(World, EventPath, FTransform::Identity, true);
+                                }
+                            }
+                        }
+                    }
+                });
             }
         );
+
+        StopTrigger->ExecuteBlock(
+            [](int32, int32) {},
+            [this](int32 StartFrame, int32)
+            {
+                const FGuid ToStop = CurrentInstance;
+                if (ToStop.IsValid())
+                {
+                    AsyncTask(ENamedThreads::GameThread, [ToStop]()
+                    {
+                        if (GEngine)
+                        {
+                            UWorld* World = GEngine->GetWorldContexts().Num() ? GEngine->GetWorldContexts()[0].World() : nullptr;
+                            if (World)
+                            {
+                                if (UGameInstance* GI = World->GetGameInstance())
+                                {
+                                    if (UFMODProxySubsystem* Proxy = GI->GetSubsystem<UFMODProxySubsystem>())
+                                    {
+                                        Proxy->StopEvent(ToStop, EFMOD_STUDIO_STOP_MODE::ALLOWFADEOUT);
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+        );
+
+        if (CurrentInstance.IsValid())
+        {
+            bool bStillPlaying = false;
+            if (GEngine)
+            {
+                UWorld* World = GEngine->GetWorldContexts().Num() ? GEngine->GetWorldContexts()[0].World() : nullptr;
+                if (World)
+                {
+                    if (UGameInstance* GI = World->GetGameInstance())
+                    {
+                        if (UFMODProxySubsystem* Proxy = GI->GetSubsystem<UFMODProxySubsystem>())
+                        {
+                            bStillPlaying = Proxy->IsPlaying(CurrentInstance);
+                        }
+                    }
+                }
+            }
+
+            if (!bStillPlaying)
+            {
+                OutFinishedTrigger->TriggerFrame(0);
+                *OutIsPlaying = false;
+                CurrentInstance.Invalidate();
+            }
+        }
 
     }
 
     //------------------------------------------------------------------------------
 
-    void FMetaSoundFMODProxyNewOperator::Reset()
+    void FMetaSoundFMODProxyNewOperator::Reset(const IOperator::FResetParams& InParams)
     {
-        TriggerOnNext->Reset();
+        if (CurrentInstance.IsValid())
+        {
+            const FGuid ToStop = CurrentInstance;
+            AsyncTask(ENamedThreads::GameThread, [ToStop]()
+            {
+                if (GEngine)
+                {
+                    UWorld* World = GEngine->GetWorldContexts().Num() ? GEngine->GetWorldContexts()[0].World() : nullptr;
+                    if (World)
+                    {
+                        if (UGameInstance* GI = World->GetGameInstance())
+                        {
+                            if (UFMODProxySubsystem* Proxy = GI->GetSubsystem<UFMODProxySubsystem>())
+                            {
+                                Proxy->StopEvent(ToStop, EFMOD_STUDIO_STOP_MODE::ALLOWFADEOUT);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        CurrentInstance.Invalidate();
+        *OutIsPlaying = false;
+        OutFinishedTrigger->Reset();
     }
     
     //------------------------------------------------------------------------------

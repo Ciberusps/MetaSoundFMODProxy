@@ -43,6 +43,7 @@ public class MetaSoundFMODProxy : ModuleRules
 				"EditorStyle",
 				"EditorWidgets",
 				"AudioEditor",
+				"AssetTools",
 			});
 		}
 	}

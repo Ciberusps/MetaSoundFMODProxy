@@ -8,6 +8,7 @@
 #include "SoundNodeFMOD.generated.h"
 
 class UFMODAudioComponent;
+namespace FMOD { namespace Studio { class EventInstance; } }
 
 /**
  * Sound node that plays FMOD events within SoundCues
@@ -68,4 +69,9 @@ private:
 	/** Callback for when FMOD event stops */
 	UFUNCTION()
 	void OnFMODEventStopped();
+
+#if WITH_EDITORONLY_DATA
+	/** Editor preview instance to prevent constant retriggering in SoundCue editor */
+	FMOD::Studio::EventInstance* PreviewInstance = nullptr;
+#endif
 };

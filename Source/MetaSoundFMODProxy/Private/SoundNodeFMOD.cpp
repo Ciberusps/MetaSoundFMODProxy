@@ -135,7 +135,13 @@ void USoundNodeFMOD::ParseNodes(
 					{
 						if (bUsedProxy)
 						{
-							WeakWaiting->SetInstanceId(InstanceGuid);
+							// Provide subsystem so the waiting wave can poll immediately
+							UFMODProxySubsystem* ProxySubsystemLocal = nullptr;
+							if (UGameInstance* InnerGI = World ? World->GetGameInstance() : nullptr)
+							{
+								ProxySubsystemLocal = InnerGI->GetSubsystem<UFMODProxySubsystem>();
+							}
+							WeakWaiting->InitWaiting(InstanceGuid, ProxySubsystemLocal);
 						}
 						else
 						{

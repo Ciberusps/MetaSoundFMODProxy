@@ -61,17 +61,14 @@ int32 UFMODWaitingWave::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSam
 		return 0;
 	}
 
-	// Zero-fill the provided buffer up to the expected size without changing its length
-	const int32 Channels = FMath::Max(1, NumChannels);
-	const int32 BytesPerSample = sizeof(int16);
-	const int32 MaxExpectedBytes = NumSamples * Channels * BytesPerSample;
+	// Fill the pre-sized buffer with silence and return exactly its size
 	const int32 BufferBytes = OutAudio.Num();
-	const int32 BytesToWrite = FMath::Min(MaxExpectedBytes, BufferBytes);
-	if (BytesToWrite > 0)
+	if (BufferBytes > 0)
 	{
-		FMemory::Memset(OutAudio.GetData(), 0, BytesToWrite);
+		FMemory::Memset(OutAudio.GetData(), 0, BufferBytes);
+		return BufferBytes;
 	}
-	return BytesToWrite;
+	return 0;
 }
 
 void UFMODWaitingWave::OnBeginGenerate()

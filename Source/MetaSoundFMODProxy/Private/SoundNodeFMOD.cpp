@@ -37,7 +37,7 @@ void USoundNodeFMOD::ParseNodes(
 	TArray<FWaveInstance*>& WaveInstances
 )
 {
-	// Clean up any finished components first
+	// Clean up finished FMOD components; defer waiting wave cleanup to preview start
 	CleanupFinishedComponents();
 
 	if (FMODEvent && AudioDevice)
@@ -73,9 +73,18 @@ void USoundNodeFMOD::ParseNodes(
 						ActiveWaitingWaves.Remove(NodeWaveInstanceHash);
 					}
 				}
+				// If an existing wave has finished, clear it and do not retrigger automatically in this preview tick
+				if (WaitingWave && WaitingWave->HasFinished())
+				{
+					ActiveWaitingWaves.Remove(NodeWaveInstanceHash);
+					return;
+				}
 				bool bCreatedNow = false;
 				if (!WaitingWave)
 				{
+					// Clean finished waves and reset state only at creation time (user pressed Play)
+					CleanupFinishedWaitingWaves();
+					PreviewStoppedHashes.Empty();
 					WaitingWave = NewObject<UFMODWaitingWave>(GetTransientPackage());
 					if (WaitingWave)
 					{
@@ -88,6 +97,12 @@ void USoundNodeFMOD::ParseNodes(
 					FSoundParseParameters UpdatedParams = ParseParams;
 					UpdatedParams.bLooping = true;
 					WaitingWave->Parse(AudioDevice, NodeWaveInstanceHash, ActiveSound, UpdatedParams, WaveInstances);
+					if (WaitingWave->HasFinished())
+					{
+						// Do not create a new waiting wave in this same parse when finished
+						ActiveWaitingWaves.Remove(NodeWaveInstanceHash);
+						return;
+					}
 					if (bCreatedNow)
 					{
 						TWeakObjectPtr<UFMODWaitingWave> WeakWaiting = WaitingWave;
@@ -228,9 +243,26 @@ void USoundNodeFMOD::CleanupFinishedComponents()
 	}
 }
 
-
-void USoundNodeFMOD::OnFMODEventStopped()
+void USoundNodeFMOD::CleanupFinishedWaitingWaves()
 {
+	TArray<uint32> KeysToRemove;
+	for (auto& WavePair : ActiveWaitingWaves)
+	{
+		if (!WavePair.Value.IsValid())
+		{
+			KeysToRemove.Add(WavePair.Key);
+			continue;
+		}
+		UFMODWaitingWave* Wave = WavePair.Value.Get();
+		if (Wave && Wave->HasFinished())
+		{
+			KeysToRemove.Add(WavePair.Key);
+		}
+	}
+	for (uint32 Key : KeysToRemove)
+	{
+		ActiveWaitingWaves.Remove(Key);
+	}
 }
 
 

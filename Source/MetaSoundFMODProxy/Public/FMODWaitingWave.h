@@ -44,6 +44,8 @@ private:
 	FMOD::Studio::EventInstance* PreviewInstance = nullptr;
 	/** While we are waiting for InstanceId/SubSystem or Editor preview instance to be assigned, keep generating silence */
 	bool bPending = false;
+	/** True once we've observed the FMOD instance playing at least once */
+	bool bHasObservedPlaying = false;
 };
 
 

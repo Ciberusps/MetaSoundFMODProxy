@@ -12,6 +12,7 @@ UFMODWaitingWave::UFMODWaitingWave(const FObjectInitializer& ObjectInitializer)
 	bStreaming = false;
 	Duration = INDEFINITELY_LOOPING_DURATION;
 	bFinished = false;
+	bHasObservedPlaying = false;
 }
 
 void UFMODWaitingWave::InitWaiting(const FGuid& InInstanceId, UFMODProxySubsystem* InSubsystem)
@@ -30,6 +31,7 @@ void UFMODWaitingWave::InitWaitingPreview(FMOD::Studio::EventInstance* InPreview
 {
 	PreviewInstance = InPreviewInstance;
 	bFinished = false;
+	bHasObservedPlaying = false;
 }
 
 int32 UFMODWaitingWave::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSamples)
@@ -38,9 +40,21 @@ int32 UFMODWaitingWave::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSam
 	if (PreviewInstance != nullptr)
 	{
 		FMOD_STUDIO_PLAYBACK_STATE State;
-		if (PreviewInstance->getPlaybackState(&State) == FMOD_OK)
+		FMOD_RESULT Result = PreviewInstance->getPlaybackState(&State);
+		if (Result != FMOD_OK)
 		{
-			if (State == FMOD_STUDIO_PLAYBACK_STOPPED)
+			// Treat invalid handle or any error as finished to avoid hanging waves
+			bFinished = true;
+			return 0;
+		}
+		if (!bHasObservedPlaying && (State == FMOD_STUDIO_PLAYBACK_STARTING || State == FMOD_STUDIO_PLAYBACK_PLAYING))
+		{
+			bHasObservedPlaying = true;
+		}
+		if (State == FMOD_STUDIO_PLAYBACK_STOPPED)
+		{
+			// Only finish if we've seen it playing, otherwise ignore initial STOPPED
+			if (bHasObservedPlaying)
 			{
 				bFinished = true;
 				return 0;
@@ -51,8 +65,11 @@ int32 UFMODWaitingWave::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSam
 	{
 		if (!Subsystem->IsPlaying(InstanceId))
 		{
-			bFinished = true;
-			return 0;
+			if (bHasObservedPlaying)
+			{
+				bFinished = true;
+				return 0;
+			}
 		}
 	}
 

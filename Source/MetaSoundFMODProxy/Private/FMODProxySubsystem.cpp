@@ -176,10 +176,8 @@ bool UFMODProxySubsystem::IsPlaying(const FGuid& InstanceId) const
             {
                 if (State == FMOD_STUDIO_PLAYBACK_STOPPED)
                 {
-                    if (Found->Watch)
-                    {
-                        Found->Watch->bStopped.store(true);
-                    }
+                    // Drop finished entry so waiting waves can finish and be cleaned up
+                    const_cast<UFMODProxySubsystem*>(this)->InstanceMap.Remove(InstanceId);
                     return false;
                 }
                 return true;

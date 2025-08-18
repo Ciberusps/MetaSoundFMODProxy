@@ -57,6 +57,9 @@ void USoundFMODEvent::Parse(
 		return;
 	}
 
+	// Clean old finished waves
+	CleanupFinishedWaitingWaves();
+
 #if WITH_EDITOR
 	if (GIsEditor && (!GEditor || !GEditor->PlayWorld))
 	{
@@ -165,4 +168,26 @@ void USoundFMODEvent::Parse(
 	});
 }
 
+
+void USoundFMODEvent::CleanupFinishedWaitingWaves()
+{
+	TArray<uint32> KeysToRemove;
+	for (auto& Pair : ActiveWaitingWaves)
+	{
+		if (!Pair.Value.IsValid())
+		{
+			KeysToRemove.Add(Pair.Key);
+			continue;
+		}
+		UFMODWaitingWave* Wave = Pair.Value.Get();
+		if (Wave && Wave->HasFinished())
+		{
+			KeysToRemove.Add(Pair.Key);
+		}
+	}
+	for (uint32 Key : KeysToRemove)
+	{
+		ActiveWaitingWaves.Remove(Key);
+	}
+}
 

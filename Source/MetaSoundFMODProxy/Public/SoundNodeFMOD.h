@@ -64,6 +64,10 @@ private:
 	UPROPERTY(Transient)
 	TMap<uint32, TWeakObjectPtr<UFMODWaitingWave>> ActiveWaitingWaves;
 
+	/** Editor-only: remember hashes that finished to avoid immediate retrigger until preview restarts */
+	UPROPERTY(Transient)
+	TSet<uint32> PreviewStoppedHashes;
+
 	/** Track active FMOD components spawned by this node */
 	UPROPERTY(Transient)
 	TMap<uint32, TWeakObjectPtr<UFMODAudioComponent>> ActiveFMODComponents;
@@ -71,9 +75,8 @@ private:
 	/** Clean up finished FMOD components */
 	void CleanupFinishedComponents();
 
-	/** Callback for when FMOD event stops */
-	UFUNCTION()
-	void OnFMODEventStopped();
+	/** Clean up finished or invalid waiting waves */
+	void CleanupFinishedWaitingWaves();
 
 #if WITH_EDITORONLY_DATA
 	/** Editor preview instance to prevent constant retriggering in SoundCue editor */

@@ -58,6 +58,11 @@ protected:
 		const FSoundParseParameters& ParseParams,
 		TArray<FWaveInstance*>& WaveInstances
 	) const;
+
+private:
+	/** Per-instance waiting waves to avoid recreating each parse */
+	UPROPERTY(Transient)
+	TMap<uint32, TWeakObjectPtr<UFMODWaitingWave>> ActiveWaitingWaves;
 };
 
 

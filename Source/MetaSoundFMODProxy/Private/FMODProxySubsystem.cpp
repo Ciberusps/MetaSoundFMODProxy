@@ -32,40 +32,23 @@ FGuid UFMODProxySubsystem::PlayEventAtLocationByAsset(UWorld* World, UFMODEvent*
     // Use the FMOD UE BlueprintStatics to play an event (returns FFMODEventInstance)
     FFMODEventInstance UEInstance = UFMODBlueprintStatics::PlayEventAtLocation(World, Event, Transform, bAutoDestroy);
 
-    // Try to extract the native pointer via the wrapper - this depends on FMOD UE internals. If unavailable,
-    // you'd need to create the instance via the FMOD Studio API directly.
-    FMOD::Studio::EventInstance* NativeInst = nullptr;
-
-#if 0
-    // If you know how to extract native pointer from FFMODEventInstance in your FMOD UE plugin version do that here.
-    NativeInst = /* extract native pointer */ nullptr;
-#endif
+    // Extract native instance pointer from FMOD UE wrapper if available
+    FMOD::Studio::EventInstance* NativeInst = UEInstance.Instance;
 
     FGuid Guid = FGuid::NewGuid();
+
+    FStoredInstance Stored;
+    Stored.Instance = NativeInst;
+    Stored.Watch = MakeUnique<FInstanceWatch>(Guid);
 
     if (NativeInst)
     {
         RegisterInstanceWatch(NativeInst, Guid);
-
-        FStoredInstance Stored;
-        Stored.Instance = NativeInst;
-        Stored.Watch = MakeUnique<FInstanceWatch>(Guid);
-
-        FScopeLock Lock(&MapLock);
-        InstanceMap.Add(Guid, MoveTemp(Stored));
-
-        return Guid;
     }
-    else
-    {
-        // Fallback: store a watch so IsPlaying can be polled if you implement polling logic.
-        FStoredInstance Stored;
-        Stored.Instance = nullptr;
-        Stored.Watch = MakeUnique<FInstanceWatch>(Guid);
-        FScopeLock Lock(&MapLock);
-        InstanceMap.Add(Guid, MoveTemp(Stored));
-        return Guid;
-    }
+
+    FScopeLock Lock(&MapLock);
+    InstanceMap.Add(Guid, MoveTemp(Stored));
+    return Guid;
 }
 
 FGuid UFMODProxySubsystem::PlayEventAtLocationByPath(UWorld* World, const FString& EventPath, const FTransform& Transform, bool bAutoDestroy)
@@ -185,6 +168,23 @@ bool UFMODProxySubsystem::IsPlaying(const FGuid& InstanceId) const
     FScopeLock Lock(&MapLock);
     if (const FStoredInstance* Found = InstanceMap.Find(InstanceId))
     {
+        // If we have a native pointer, query playback state to be robust even if callback didn't fire
+        if (Found->Instance)
+        {
+            FMOD_STUDIO_PLAYBACK_STATE State;
+            if (Found->Instance->getPlaybackState(&State) == FMOD_OK)
+            {
+                if (State == FMOD_STUDIO_PLAYBACK_STOPPED)
+                {
+                    if (Found->Watch)
+                    {
+                        Found->Watch->bStopped.store(true);
+                    }
+                    return false;
+                }
+                return true;
+            }
+        }
         if (Found->Watch)
         {
             return !Found->Watch->bStopped.load();

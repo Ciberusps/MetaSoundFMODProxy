@@ -88,7 +88,32 @@ void USoundFMODEvent::Parse(
 		return;
 	}
 
-	UFMODWaitingWave* WaitingWave = CreateWaitingWave(AudioDevice, NodeWaveInstanceHash, ActiveSound, ParseParams, WaveInstances);
+	UFMODWaitingWave* WaitingWave = nullptr;
+	if (TWeakObjectPtr<UFMODWaitingWave>* FoundPtr = ActiveWaitingWaves.Find(NodeWaveInstanceHash))
+	{
+		if (FoundPtr->IsValid())
+		{
+			WaitingWave = FoundPtr->Get();
+		}
+		else
+		{
+			ActiveWaitingWaves.Remove(NodeWaveInstanceHash);
+		}
+	}
+	if (!WaitingWave)
+	{
+		WaitingWave = CreateWaitingWave(AudioDevice, NodeWaveInstanceHash, ActiveSound, ParseParams, WaveInstances);
+		if (WaitingWave)
+		{
+			ActiveWaitingWaves.Add(NodeWaveInstanceHash, WaitingWave);
+		}
+	}
+	else
+	{
+		FSoundParseParameters UpdatedParams = ParseParams;
+		UpdatedParams.bLooping = true;
+		WaitingWave->Parse(AudioDevice, NodeWaveInstanceHash, ActiveSound, UpdatedParams, WaveInstances);
+	}
 	if (!WaitingWave)
 	{
 		return;

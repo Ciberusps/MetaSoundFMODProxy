@@ -8,6 +8,7 @@
 #include "SoundNodeFMOD.generated.h"
 
 class UFMODAudioComponent;
+class UFMODWaitingWave;
 namespace FMOD { namespace Studio { class EventInstance; } }
 
 /**
@@ -59,6 +60,10 @@ public:
 
 
 private:
+	/** Track per-parse waiting waves so we don't recreate every call */
+	UPROPERTY(Transient)
+	TMap<uint32, TWeakObjectPtr<UFMODWaitingWave>> ActiveWaitingWaves;
+
 	/** Track active FMOD components spawned by this node */
 	UPROPERTY(Transient)
 	TMap<uint32, TWeakObjectPtr<UFMODAudioComponent>> ActiveFMODComponents;

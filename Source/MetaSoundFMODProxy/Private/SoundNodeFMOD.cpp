@@ -61,31 +61,54 @@ void USoundNodeFMOD::ParseNodes(
 		{
 			if (FMODEvent)
 			{
-				UFMODWaitingWave* WaitingWave = NewObject<UFMODWaitingWave>(GetTransientPackage());
+				UFMODWaitingWave* WaitingWave = nullptr;
+				if (TWeakObjectPtr<UFMODWaitingWave>* FoundWave = ActiveWaitingWaves.Find(NodeWaveInstanceHash))
+				{
+					if (FoundWave->IsValid())
+					{
+						WaitingWave = FoundWave->Get();
+					}
+					else
+					{
+						ActiveWaitingWaves.Remove(NodeWaveInstanceHash);
+					}
+				}
+				bool bCreatedNow = false;
+				if (!WaitingWave)
+				{
+					WaitingWave = NewObject<UFMODWaitingWave>(GetTransientPackage());
+					if (WaitingWave)
+					{
+						ActiveWaitingWaves.Add(NodeWaveInstanceHash, WaitingWave);
+						bCreatedNow = true;
+					}
+				}
 				if (WaitingWave)
 				{
 					FSoundParseParameters UpdatedParams = ParseParams;
 					UpdatedParams.bLooping = true;
-					WaitingWave->InitWaitingPreview(nullptr);
 					WaitingWave->Parse(AudioDevice, NodeWaveInstanceHash, ActiveSound, UpdatedParams, WaveInstances);
-					TWeakObjectPtr<UFMODWaitingWave> WeakWaiting = WaitingWave;
-					UFMODEvent* EventCopy = FMODEvent;
-					AsyncTask(ENamedThreads::GameThread, [WeakWaiting, EventCopy]()
+					if (bCreatedNow)
 					{
-						if (!EventCopy)
+						TWeakObjectPtr<UFMODWaitingWave> WeakWaiting = WaitingWave;
+						UFMODEvent* EventCopy = FMODEvent;
+						AsyncTask(ENamedThreads::GameThread, [WeakWaiting, EventCopy]()
 						{
-							return;
-						}
-						FMOD::Studio::EventInstance* PreviewInstance = IFMODStudioModule::Get().CreateAuditioningInstance(EventCopy);
-						if (PreviewInstance)
-						{
-							PreviewInstance->start();
-							if (WeakWaiting.IsValid())
+							if (!EventCopy)
 							{
-								WeakWaiting->InitWaitingPreview(PreviewInstance);
+								return;
 							}
-						}
-					});
+							FMOD::Studio::EventInstance* PreviewInst = IFMODStudioModule::Get().CreateAuditioningInstance(EventCopy);
+							if (PreviewInst)
+							{
+								PreviewInst->start();
+								if (WeakWaiting.IsValid())
+								{
+									WeakWaiting->InitWaitingPreview(PreviewInst);
+								}
+							}
+						});
+					}
 				}
 			}
 			return;
@@ -98,12 +121,28 @@ void USoundNodeFMOD::ParseNodes(
 		{
 			FGuid PlayedInstanceGuid;
 
-			UFMODWaitingWave* WaitingWave = NewObject<UFMODWaitingWave>(GetTransientPackage());
+			UFMODWaitingWave* WaitingWave = nullptr;
+			if (TWeakObjectPtr<UFMODWaitingWave>* FoundWavePtr = ActiveWaitingWaves.Find(NodeWaveInstanceHash))
+			{
+				if (FoundWavePtr->IsValid())
+				{
+					WaitingWave = FoundWavePtr->Get();
+				}
+				else
+				{
+					ActiveWaitingWaves.Remove(NodeWaveInstanceHash);
+				}
+			}
+			if (!WaitingWave)
+			{
+				WaitingWave = NewObject<UFMODWaitingWave>(GetTransientPackage());
+				ActiveWaitingWaves.Add(NodeWaveInstanceHash, WaitingWave);
+			}
 			if (WaitingWave)
 			{
 				FSoundParseParameters UpdatedParams = ParseParams;
 				UpdatedParams.bLooping = true;
-				WaitingWave->InitWaiting(PlayedInstanceGuid, nullptr);
+				// If reused, it will continue generating; if new, will be initialized below when instance starts
 				WaitingWave->Parse(AudioDevice, NodeWaveInstanceHash, ActiveSound, UpdatedParams, WaveInstances);
 				TWeakObjectPtr<UFMODWaitingWave> WeakWaiting = WaitingWave;
 

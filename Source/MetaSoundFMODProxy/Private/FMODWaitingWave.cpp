@@ -47,7 +47,7 @@ int32 UFMODWaitingWave::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSam
 			}
 		}
 	}
-	else if (Subsystem.IsValid())
+	else if (Subsystem.IsValid() && InstanceId.IsValid())
 	{
 		if (!Subsystem->IsPlaying(InstanceId))
 		{
@@ -55,11 +55,7 @@ int32 UFMODWaitingWave::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSam
 			return 0;
 		}
 	}
-	else
-	{
-		bFinished = true;
-		return 0;
-	}
+
 
 	// Fill the pre-sized buffer with silence and return exactly its size
 	const int32 BufferBytes = OutAudio.Num();

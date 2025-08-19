@@ -2,6 +2,39 @@
 
 #include "FMODWaitingWave.h"
 #include "FMODProxySubsystem.h"
+#include <fmod_studio.h>
+#include "Async/Async.h"
+
+static FMOD_RESULT StaticPreviewStoppedCallback(
+	FMOD_STUDIO_EVENT_CALLBACK_TYPE Type,
+	FMOD_STUDIO_EVENTINSTANCE* Event,
+	void* /*Parameters*/)
+{
+	if (Type & FMOD_STUDIO_EVENT_CALLBACK_STOPPED)
+	{
+		void* UserData = nullptr;
+		if (FMOD_Studio_EventInstance_GetUserData(Event, &UserData) == FMOD_OK && UserData)
+		{
+			UFMODWaitingWave* Wave = reinterpret_cast<UFMODWaitingWave*>(UserData);
+			TWeakObjectPtr<UFMODWaitingWave> WeakWave = Wave;
+			AsyncTask(ENamedThreads::GameThread, [WeakWave]()
+			{
+				if (WeakWave.IsValid())
+				{
+					WeakWave->OnEndGenerate();
+					// Mark finished explicitly on GameThread
+					// Direct member access as friend not available; call a small lambda
+					UFMODWaitingWave* Strong = WeakWave.Get();
+					if (Strong)
+					{
+						// We cannot access private bFinished here; but OnGenerate will see STOPPED soon. Force a tick by leaving as is.
+					}
+				}
+			});
+		}
+	}
+	return FMOD_OK;
+}
 
 UFMODWaitingWave::UFMODWaitingWave(const FObjectInitializer& ObjectInitializer)
     : Super(ObjectInitializer)
@@ -31,7 +64,14 @@ void UFMODWaitingWave::InitWaitingPreview(FMOD::Studio::EventInstance* InPreview
 {
 	PreviewInstance = InPreviewInstance;
 	bFinished = false;
-	bHasObservedPlaying = false;
+	// Preview path calls start() before this; assume it will begin playing
+	bHasObservedPlaying = true;
+	if (PreviewInstance)
+	{
+		FMOD_STUDIO_EVENTINSTANCE* CEvent = reinterpret_cast<FMOD_STUDIO_EVENTINSTANCE*>(PreviewInstance);
+		FMOD_Studio_EventInstance_SetUserData(CEvent, this);
+		FMOD_Studio_EventInstance_SetCallback(CEvent, &StaticPreviewStoppedCallback, FMOD_STUDIO_EVENT_CALLBACK_STOPPED);
+	}
 }
 
 int32 UFMODWaitingWave::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSamples)
@@ -43,8 +83,19 @@ int32 UFMODWaitingWave::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSam
 		FMOD_RESULT Result = PreviewInstance->getPlaybackState(&State);
 		if (Result != FMOD_OK)
 		{
-			// Treat invalid handle or any error as finished to avoid hanging waves
-			bFinished = true;
+			// Before we have observed playing, keep generating silence instead of finishing
+			if (bHasObservedPlaying)
+			{
+				bFinished = true;
+				return 0;
+			}
+			// Not started yet but invalid/unknown — keep alive this tick
+			const int32 BufferBytes = OutAudio.Num();
+			if (BufferBytes > 0)
+			{
+				FMemory::Memset(OutAudio.GetData(), 0, BufferBytes);
+				return BufferBytes;
+			}
 			return 0;
 		}
 		if (!bHasObservedPlaying && (State == FMOD_STUDIO_PLAYBACK_STARTING || State == FMOD_STUDIO_PLAYBACK_PLAYING))
@@ -63,7 +114,11 @@ int32 UFMODWaitingWave::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSam
 	}
 	else if (Subsystem.IsValid() && InstanceId.IsValid())
 	{
-		if (!Subsystem->IsPlaying(InstanceId))
+		if (Subsystem->IsPlaying(InstanceId))
+		{
+			bHasObservedPlaying = true;
+		}
+		else
 		{
 			if (bHasObservedPlaying)
 			{

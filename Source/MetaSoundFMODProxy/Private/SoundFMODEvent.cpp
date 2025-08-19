@@ -57,17 +57,59 @@ void USoundFMODEvent::Parse(
 		return;
 	}
 
-	// Clean old finished waves
-	CleanupFinishedWaitingWaves();
+	// Do not clean finished waves here; avoid immediate retrigger within same play
 
 #if WITH_EDITOR
 	if (GIsEditor && (!GEditor || !GEditor->PlayWorld))
 	{
-		UFMODWaitingWave* WaitingWave = CreateWaitingWave(AudioDevice, NodeWaveInstanceHash, ActiveSound, ParseParams, WaveInstances);
-		if (WaitingWave)
+		// Use a stable non-zero key for preview caching
+		uint32 Key = static_cast<uint32>(NodeWaveInstanceHash);
+		if (Key == 0)
+		{
+			Key = 1u;
+		}
+		UFMODWaitingWave* WaitingWave = nullptr;
+		if (TWeakObjectPtr<UFMODWaitingWave>* FoundPtr = ActiveWaitingWaves.Find(Key))
+		{
+			if (FoundPtr->IsValid())
+			{
+				WaitingWave = FoundPtr->Get();
+			}
+			else
+			{
+				ActiveWaitingWaves.Remove(Key);
+			}
+		}
+		bool bCreatedNow = false;
+		if (!WaitingWave)
+		{
+			WaitingWave = CreateWaitingWave(AudioDevice, Key, ActiveSound, ParseParams, WaveInstances);
+			if (WaitingWave)
+			{
+				ActiveWaitingWaves.Add(Key, WaitingWave);
+				bCreatedNow = true;
+			}
+		}
+		else
+		{
+			FSoundParseParameters UpdatedParams = ParseParams;
+			UpdatedParams.bLooping = true;
+			WaitingWave->Parse(AudioDevice, Key, ActiveSound, UpdatedParams, WaveInstances);
+		}
+		if (!WaitingWave)
+		{
+			return;
+		}
+		if (WaitingWave->HasFinished())
+		{
+			// Do not remove here; keep the weak entry to block this tick and let GC invalidate it
+			return;
+		}
+		if (bCreatedNow)
 		{
 			UFMODEvent* EventCopy = FMODEvent;
-			AsyncTask(ENamedThreads::GameThread, [WaitingWave, EventCopy]()
+			TWeakObjectPtr<UFMODWaitingWave> WeakWaiting = WaitingWave;
+			AsyncTask(ENamedThreads::GameThread, [WeakWaiting, EventCopy]()
 			{
 				if (!EventCopy)
 				{
@@ -77,7 +119,10 @@ void USoundFMODEvent::Parse(
 				if (PreviewInstance)
 				{
 					PreviewInstance->start();
-					WaitingWave->InitWaitingPreview(PreviewInstance);
+					if (WeakWaiting.IsValid())
+					{
+						WeakWaiting->InitWaitingPreview(PreviewInstance);
+					}
 				}
 			});
 		}
@@ -88,27 +133,36 @@ void USoundFMODEvent::Parse(
 	UWorld* World = GWorld;
 	if (!World)
 	{
-		return;
+		if (GEngine && GEngine->GetWorldContexts().Num() > 0)
+		{
+			World = GEngine->GetWorldContexts()[0].World();
+		}
+		if (!World)
+		{
+			return;
+		}
 	}
 
 	UFMODWaitingWave* WaitingWave = nullptr;
-	if (TWeakObjectPtr<UFMODWaitingWave>* FoundPtr = ActiveWaitingWaves.Find(NodeWaveInstanceHash))
+	if (TWeakObjectPtr<UFMODWaitingWave>* FoundPtr2 = ActiveWaitingWaves.Find(NodeWaveInstanceHash))
 	{
-		if (FoundPtr->IsValid())
+		if (FoundPtr2->IsValid())
 		{
-			WaitingWave = FoundPtr->Get();
+			WaitingWave = FoundPtr2->Get();
 		}
 		else
 		{
 			ActiveWaitingWaves.Remove(NodeWaveInstanceHash);
 		}
 	}
+	bool bCreatedNowRuntime = false;
 	if (!WaitingWave)
 	{
 		WaitingWave = CreateWaitingWave(AudioDevice, NodeWaveInstanceHash, ActiveSound, ParseParams, WaveInstances);
 		if (WaitingWave)
 		{
 			ActiveWaitingWaves.Add(NodeWaveInstanceHash, WaitingWave);
+			bCreatedNowRuntime = true;
 		}
 	}
 	else
@@ -121,51 +175,59 @@ void USoundFMODEvent::Parse(
 	{
 		return;
 	}
+	if (WaitingWave->HasFinished())
+	{
+		// Runtime: allow GC to clear and block this tick
+		return;
+	}
 
 	FTransform TransformCopy = ParseParams.Transform;
 	UFMODEvent* EventCopy = FMODEvent;
 	TMap<FName, float> ParamsCopy = EventParameters;
 	bool bAutoDestroyCopy = bAutoDestroy;
 
-	AsyncTask(ENamedThreads::GameThread, [World, WaitingWave, TransformCopy, EventCopy, ParamsCopy, bAutoDestroyCopy]()
+	if (bCreatedNowRuntime)
 	{
-		if (!EventCopy)
+		AsyncTask(ENamedThreads::GameThread, [World, WaitingWave, TransformCopy, EventCopy, ParamsCopy, bAutoDestroyCopy]()
 		{
-			return;
-		}
-		FGuid InstanceGuid;
-		bool bUsedProxy = false;
-		UFMODProxySubsystem* ProxySubsystemLocal = nullptr;
-		if (UGameInstance* GI = World ? World->GetGameInstance() : nullptr)
-		{
-			if (UFMODProxySubsystem* ProxySubsystem = GI->GetSubsystem<UFMODProxySubsystem>())
+			if (!EventCopy)
 			{
-				InstanceGuid = ProxySubsystem->PlayEventAtLocationByAsset(World, EventCopy, TransformCopy, bAutoDestroyCopy);
+				return;
+			}
+			FGuid InstanceGuid;
+			bool bUsedProxy = false;
+			UFMODProxySubsystem* ProxySubsystemLocal = nullptr;
+			if (UGameInstance* GI = World ? World->GetGameInstance() : nullptr)
+			{
+				if (UFMODProxySubsystem* ProxySubsystem = GI->GetSubsystem<UFMODProxySubsystem>())
+				{
+					InstanceGuid = ProxySubsystem->PlayEventAtLocationByAsset(World, EventCopy, TransformCopy, bAutoDestroyCopy);
+					for (const auto& KV : ParamsCopy)
+					{
+						ProxySubsystem->SetEventParameter(InstanceGuid, KV.Key.ToString(), KV.Value);
+					}
+					bUsedProxy = true;
+					ProxySubsystemLocal = ProxySubsystem;
+				}
+			}
+
+			if (bUsedProxy)
+			{
+				WaitingWave->InitWaiting(InstanceGuid, ProxySubsystemLocal);
+			}
+			else
+			{
+				// Fallback: use FMOD blueprint statics
+				UObject* WorldContext = World;
+				FFMODEventInstance EventInstance = UFMODBlueprintStatics::PlayEventAtLocation(WorldContext, EventCopy, TransformCopy, true);
 				for (const auto& KV : ParamsCopy)
 				{
-					ProxySubsystem->SetEventParameter(InstanceGuid, KV.Key.ToString(), KV.Value);
+					UFMODBlueprintStatics::EventInstanceSetParameter(EventInstance, KV.Key, KV.Value);
 				}
-				bUsedProxy = true;
-				ProxySubsystemLocal = ProxySubsystem;
+				WaitingWave->InitWaitingPreview(EventInstance.Instance);
 			}
-		}
-
-		if (bUsedProxy)
-		{
-			WaitingWave->InitWaiting(InstanceGuid, ProxySubsystemLocal);
-		}
-		else
-		{
-			// Fallback: use FMOD blueprint statics
-			UObject* WorldContext = World;
-			FFMODEventInstance EventInstance = UFMODBlueprintStatics::PlayEventAtLocation(WorldContext, EventCopy, TransformCopy, true);
-			for (const auto& KV : ParamsCopy)
-			{
-				UFMODBlueprintStatics::EventInstanceSetParameter(EventInstance, KV.Key, KV.Value);
-			}
-			WaitingWave->InitWaitingPreview(EventInstance.Instance);
-		}
-	});
+		});
+	}
 }
 
 

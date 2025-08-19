@@ -14,7 +14,7 @@ class UFMODWaitingWave;
  * USoundBase-derived asset that plays an FMOD Studio Event when parsed by UE audio.
  * Produces a silent procedural wave to keep the audio graph alive until the FMOD event ends.
  */
-UCLASS(BlueprintType, meta=(DisplayName="FMOD Sound (Event)"))
+UCLASS(BlueprintType, meta=(DisplayName="FMOD Sound (Event)"), editinlinenew)
 class METASOUNDFMODPROXY_API USoundFMODEvent : public USoundBase
 {
 	GENERATED_BODY()
@@ -48,6 +48,9 @@ public:
 		const FSoundParseParameters& ParseParams,
 		TArray<FWaveInstance*>& WaveInstances
 	) override;
+
+	virtual bool IsPlayable() const override { return FMODEvent != nullptr; }
+	virtual float GetDuration() const override { return INDEFINITELY_LOOPING_DURATION; }
 
 protected:
 	/** Create and push a waiting wave to WaveInstances, returning the created object */
